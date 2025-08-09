@@ -9,5 +9,4 @@
 		public static void main(String[] args) {
 			SpringApplication.run(GunRitualServerApplication.class, args);
 		}
-
 	}
