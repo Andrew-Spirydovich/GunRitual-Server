@@ -12,6 +12,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.UUID;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
@@ -26,7 +27,12 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        String playerId = UUID.randomUUID().toString();
+
+        session.getAttributes().put("playerId", playerId);
         System.out.println("Игрок подключился: " + session.getId());
+        // Отправляем клиенту его ID
+        session.sendMessage(new TextMessage("{\"type\":\"CONNECTED\",\"player_id\":\"" + playerId + "\"}"));
     }
 
     private void broadcastToRoom(String roomId, GameMessage msg, WebSocketSession exclude) throws IOException {
@@ -34,17 +40,26 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         try {
             json = objectMapper.writeValueAsString(msg);
         } catch (JsonProcessingException e) {
-            e.printStackTrace();
+            logger.warn("Не удалось сериализовать {}", e.getMessage());
             return; // Прерываем, если не удалось сериализовать
         }
+
+//        var sessions = sessionManager.getRoomSession(roomId);
+//        sessions.forEach( session -> {
+//            logger.warn("Сессия открыта {}", session.isOpen());
+//            logger.warn("Ceccия == exclude {}", session == exclude);
+//        });
+
 
         sessionManager.getRoomSession(roomId).stream()
                 .filter(s -> s.isOpen() && s != exclude)
                 .forEach(s -> {
                     try {
+
                         s.sendMessage(new TextMessage(json));
                     } catch (IOException e) {
-                        e.printStackTrace(); // можно заменить на логгер
+                        logger.warn("Не удалось отправить пакет на сессию {}: {}", s.getId(), e.getMessage());
+
                     }
                 });
     }
@@ -74,14 +89,16 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
         switch (msg.type) {
             case "JOIN":
+                logger.info("JOIN: Принят пакет от {}",msg.playerId);
                 sessionManager.addToRoom(msg.roomId, session);
                 broadcastToRoom(msg.roomId, msg, session);
                 break;
             case "MOVE":
-                logger.info("Игрок {} сделал ход X:{}, Y:{}",msg.playerId, msg.x, msg.y);
+                logger.info("MOVE: Принят пакет от {} сделал ход X:{}, Y:{}",msg.playerId, msg.x, msg.y);
                 broadcastToRoom(msg.roomId, msg, session);
                 break;
             case "LEAVE":
+                logger.info("LEAVE: Принят пакет от {}",msg.playerId);
                 sessionManager.removeFromRoom(msg.roomId, session);
                 broadcastToRoom(msg.roomId, msg, session);
                 break;
