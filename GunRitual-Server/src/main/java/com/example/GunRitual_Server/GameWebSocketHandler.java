@@ -12,6 +12,8 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Component
@@ -28,7 +30,6 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String playerId = UUID.randomUUID().toString();
-
         session.getAttributes().put("playerId", playerId);
         System.out.println("Игрок подключился: " + session.getId());
         // Отправляем клиенту его ID
@@ -89,9 +90,46 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
         switch (msg.type) {
             case "JOIN":
-                logger.info("JOIN: Принят пакет от {}",msg.playerId);
+                String playerId = (String) session.getAttributes().get("playerId");
+                logger.info("JOIN: Сервер назначил playerId {}", playerId);
+
                 sessionManager.addToRoom(msg.roomId, session);
-                broadcastToRoom(msg.roomId, msg, session);
+
+                // 1. Создаём ACK для нового игрока
+                GameMessage ack = new GameMessage();
+                ack.type = "JOIN_ACK";
+                ack.playerId = playerId;
+                ack.roomId = msg.roomId;
+                ack.x = 0;
+                ack.y = 0;
+
+                // 2. Добавляем список уже подключённых игроков
+                List<GameMessage> existingPlayers = new ArrayList<>();
+                for (WebSocketSession s : sessionManager.getRoomSession(msg.roomId)) {
+                    if (s == session) continue; // не включаем самого себя
+
+                    String otherId = (String) s.getAttributes().get("playerId");
+                    GameMessage other = new GameMessage();
+                    other.type = "JOIN"; // можно опустить, если клиент не требует
+                    other.playerId = otherId;
+                    other.roomId = msg.roomId;
+                    other.x = 0;
+                    other.y = 0;
+                    existingPlayers.add(other);
+                }
+                ack.existingPlayers = existingPlayers;
+
+                // 3. Отправляем ACK
+                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(ack)));
+
+                // 4. Рассылаем JOIN всем остальным
+                GameMessage broadcast = new GameMessage();
+                broadcast.type = "JOIN";
+                broadcast.playerId = playerId;
+                broadcast.roomId = msg.roomId;
+                broadcast.x = 0;
+                broadcast.y = 0;
+                broadcastToRoom(msg.roomId, broadcast, session);
                 break;
             case "MOVE":
                 logger.info("MOVE: Принят пакет от {} сделал ход X:{}, Y:{}",msg.playerId, msg.x, msg.y);
