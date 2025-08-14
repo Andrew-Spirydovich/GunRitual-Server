@@ -132,7 +132,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
                 broadcastToRoom(msg.roomId, broadcast, session);
                 break;
             case "MOVE":
-                logger.info("MOVE: Принят пакет от {} сделал ход X:{}, Y:{}",msg.playerId, msg.x, msg.y);
+                logger.info("MOVE: Принят пакет от {} сделал ход X:{}, Y:{}, dirX:{}, dirY{}",msg.playerId, msg.x, msg.y, msg.dirX, msg.dirY);
                 broadcastToRoom(msg.roomId, msg, session);
                 break;
             case "LEAVE":

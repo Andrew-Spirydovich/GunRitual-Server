@@ -8,6 +8,8 @@ public class GameMessage {
     public String roomId;
     public float x;
     public float y;
+    public float dirX;
+    public float dirY;
     public String displayName;
     public List<GameMessage> existingPlayers;
 }
