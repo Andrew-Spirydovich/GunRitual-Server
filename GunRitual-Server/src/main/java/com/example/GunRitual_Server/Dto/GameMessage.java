@@ -12,4 +12,18 @@ public class GameMessage {
     public float dirY;
     public String displayName;
     public List<GameMessage> existingPlayers;
+
+    public GameMessage() {}
+
+    public GameMessage(String type, String playerId, String roomId) {
+        this.type = type;
+        this.playerId = playerId;
+        this.roomId = roomId;
+    }
+
+    public GameMessage(String type, String playerId, String roomId, float x, float y) {
+        this(type, playerId, roomId);
+        this.x = x;
+        this.y = y;
+    }
 }

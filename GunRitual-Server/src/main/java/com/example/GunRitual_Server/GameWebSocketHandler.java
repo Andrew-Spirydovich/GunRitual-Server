@@ -12,9 +12,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
@@ -31,115 +29,116 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String playerId = UUID.randomUUID().toString();
         session.getAttributes().put("playerId", playerId);
-        System.out.println("Игрок подключился: " + session.getId());
-        // Отправляем клиенту его ID
-        session.sendMessage(new TextMessage("{\"type\":\"CONNECTED\",\"player_id\":\"" + playerId + "\"}"));
+
+        logger.info("Игрок подключился: {}", session.getId());
+        sendMessage(session, new GameMessage("CONNECTED", playerId, null));
     }
 
-    private void broadcastToRoom(String roomId, GameMessage msg, WebSocketSession exclude) throws IOException {
-        String json;
-        try {
-            json = objectMapper.writeValueAsString(msg);
-        } catch (JsonProcessingException e) {
-            logger.warn("Не удалось сериализовать {}", e.getMessage());
-            return; // Прерываем, если не удалось сериализовать
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        final GameMessage msg = objectMapper.readValue(message.getPayload(), GameMessage.class);
+
+        switch (msg.type) {
+            case "JOIN" -> handleJoin(session, msg);
+            case "MOVE" -> handleMove(session, msg);
+            case "LEAVE" -> handleLeave(session, msg);
+            default -> logger.warn("Неизвестный тип сообщения: {}", msg.type);
         }
+    }
 
-//        var sessions = sessionManager.getRoomSession(roomId);
-//        sessions.forEach( session -> {
-//            logger.warn("Сессия открыта {}", session.isOpen());
-//            logger.warn("Ceccия == exclude {}", session == exclude);
-//        });
+    private void handleJoin(WebSocketSession session, GameMessage msg) throws IOException {
+        String playerId = (String) session.getAttributes().get("playerId");
+        logger.info("JOIN: Назначен playerId {}", playerId);
 
+        synchronized (sessionManager.getRoomLock(msg.roomId)) {
+            sessionManager.addToRoom(msg.roomId, session);
 
-        sessionManager.getRoomSession(roomId).stream()
-                .filter(s -> s.isOpen() && s != exclude)
-                .forEach(s -> {
-                    try {
+            // ACK новому игроку
+            GameMessage ack = new GameMessage("JOIN_ACK", playerId, msg.roomId, 0, 0);
+            ack.existingPlayers = getExistingPlayers(session, msg.roomId);
+            sendMessage(session, ack);
 
-                        s.sendMessage(new TextMessage(json));
-                    } catch (IOException e) {
-                        logger.warn("Не удалось отправить пакет на сессию {}: {}", s.getId(), e.getMessage());
+            // JOIN всем остальным
+            broadcastToRoom(msg.roomId, new GameMessage("JOIN", playerId, msg.roomId, 0, 0), session);
+        }
+    }
 
-                    }
-                });
+    private void handleMove(WebSocketSession session, GameMessage msg) throws IOException {
+        broadcastToRoom(msg.roomId, msg, session);
+    }
+
+    private void handleLeave(WebSocketSession session, GameMessage msg) throws IOException {
+        logger.info("LEAVE: Принят пакет от {}", msg.playerId);
+        synchronized (sessionManager.getRoomLock(msg.roomId)) {
+            sessionManager.removeFromRoom(msg.roomId, session);
+            broadcastToRoom(msg.roomId, msg, session);
+        }
+    }
+
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
+        logger.error("Ошибка в сессии {}: {}", session.getId(), exception.getMessage(), exception);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String roomId = sessionManager.getRoomIdBySession(session);
+        if (roomId == null) return;
 
-        if (roomId != null) {
+        synchronized (sessionManager.getRoomLock(roomId)) {
             sessionManager.removeFromRoom(roomId, session);
-            GameMessage leaveMsg = new GameMessage();
-            leaveMsg.type = "leave";
-            leaveMsg.playerId = "unknown"; // ты можешь хранить playerId в attributes
-            leaveMsg.roomId = roomId;
+
+            String playerId = (String) session.getAttributes().get("playerId");
+            broadcastToRoom(roomId, new GameMessage("LEAVE", playerId, roomId), session);
+        }
+
+        logger.info("Сессия {} закрыта. Статус: {}", session.getId(), status);
+    }
+
+    private List<GameMessage> getExistingPlayers(WebSocketSession current, String roomId) {
+        List<GameMessage> players = new ArrayList<>();
+        for (WebSocketSession s : sessionManager.getRoomSession(roomId)) {
+            if (s == current) continue;
+            String otherId = (String) s.getAttributes().get("playerId");
+            players.add(new GameMessage("JOIN", otherId, roomId, 0, 0));
+        }
+        return players;
+    }
+
+
+    private void broadcastToRoom(String roomId, GameMessage msg, WebSocketSession exclude) {
+        final String json;
+        try {
+            json = objectMapper.writeValueAsString(msg);
+        } catch (JsonProcessingException e) {
+            logger.warn(  "Не удалось сериализовать {}", e.getMessage());
+            return;
+        }
+
+        Set<WebSocketSession> sessions = new HashSet<>(sessionManager.getRoomSession(roomId));
+        for (WebSocketSession s : sessions) {
+            if (s == exclude) continue;
 
             try {
-                broadcastToRoom(roomId, leaveMsg, session);
-            } catch (IOException e) {
-                e.printStackTrace();
+                synchronized (s) {
+                    if (s.isOpen()) {
+                        s.sendMessage(new TextMessage(json));
+                    } else {
+                        sessionManager.removeFromRoom(roomId, s);
+                    }
+                }
+            } catch (IOException | IllegalStateException e) {
+                // Сессия закрыта или ошибка отправки → удаляем
+                sessionManager.removeFromRoom(roomId, s);
+                logger.warn("Игрок {} отключился во время рассылки: {}", s.getId(), e.getMessage());
             }
         }
     }
 
-    @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        GameMessage msg = objectMapper.readValue(message.getPayload(), GameMessage.class);
 
-        switch (msg.type) {
-            case "JOIN":
-                String playerId = (String) session.getAttributes().get("playerId");
-                logger.info("JOIN: Сервер назначил playerId {}", playerId);
 
-                sessionManager.addToRoom(msg.roomId, session);
-
-                // 1. Создаём ACK для нового игрока
-                GameMessage ack = new GameMessage();
-                ack.type = "JOIN_ACK";
-                ack.playerId = playerId;
-                ack.roomId = msg.roomId;
-                ack.x = 0;
-                ack.y = 0;
-
-                // 2. Добавляем список уже подключённых игроков
-                List<GameMessage> existingPlayers = new ArrayList<>();
-                for (WebSocketSession s : sessionManager.getRoomSession(msg.roomId)) {
-                    if (s == session) continue; // не включаем самого себя
-
-                    String otherId = (String) s.getAttributes().get("playerId");
-                    GameMessage other = new GameMessage();
-                    other.type = "JOIN"; // можно опустить, если клиент не требует
-                    other.playerId = otherId;
-                    other.roomId = msg.roomId;
-                    other.x = 0;
-                    other.y = 0;
-                    existingPlayers.add(other);
-                }
-                ack.existingPlayers = existingPlayers;
-
-                // 3. Отправляем ACK
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(ack)));
-
-                // 4. Рассылаем JOIN всем остальным
-                GameMessage broadcast = new GameMessage();
-                broadcast.type = "JOIN";
-                broadcast.playerId = playerId;
-                broadcast.roomId = msg.roomId;
-                broadcast.x = 0;
-                broadcast.y = 0;
-                broadcastToRoom(msg.roomId, broadcast, session);
-                break;
-            case "MOVE":
-                logger.info("MOVE: Принят пакет от {} сделал ход X:{}, Y:{}, dirX:{}, dirY{}",msg.playerId, msg.x, msg.y, msg.dirX, msg.dirY);
-                broadcastToRoom(msg.roomId, msg, session);
-                break;
-            case "LEAVE":
-                logger.info("LEAVE: Принят пакет от {}",msg.playerId);
-                sessionManager.removeFromRoom(msg.roomId, session);
-                broadcastToRoom(msg.roomId, msg, session);
-                break;
-        }
+    private void sendMessage(WebSocketSession session, GameMessage msg) throws IOException {
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(msg)));
     }
+
 }
