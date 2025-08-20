@@ -10,6 +10,9 @@ public class GameMessage {
     public float y;
     public float dirX;
     public float dirY;
+    public float velX;
+    public float velY;
+    public String currentState;
     public String displayName;
     public List<GameMessage> existingPlayers;
 

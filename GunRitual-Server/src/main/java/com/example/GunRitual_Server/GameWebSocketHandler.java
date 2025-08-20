@@ -42,7 +42,14 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             case "JOIN" -> handleJoin(session, msg);
             case "MOVE" -> handleMove(session, msg);
             case "LEAVE" -> handleLeave(session, msg);
+            case "STATE-CHANGED" -> handleStateChanged(session, msg);
             default -> logger.warn("Неизвестный тип сообщения: {}", msg.type);
+        }
+    }
+    private void handleStateChanged(WebSocketSession session, GameMessage msg) throws IOException
+    {
+        synchronized (sessionManager.getRoomLock(msg.roomId)) {
+            broadcastToRoom(msg.roomId, msg, session);
         }
     }
 
@@ -64,7 +71,9 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleMove(WebSocketSession session, GameMessage msg) throws IOException {
-        broadcastToRoom(msg.roomId, msg, session);
+        synchronized (sessionManager.getRoomLock(msg.roomId)) {
+            broadcastToRoom(msg.roomId, msg, session);
+        }
     }
 
     private void handleLeave(WebSocketSession session, GameMessage msg) throws IOException {
@@ -111,7 +120,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         try {
             json = objectMapper.writeValueAsString(msg);
         } catch (JsonProcessingException e) {
-            logger.warn(  "Не удалось сериализовать {}", e.getMessage());
+            logger.warn( "Не удалось сериализовать {}", e.getMessage());
             return;
         }
 
