@@ -6,15 +6,12 @@ public class GameMessage {
     public String type;
     public String playerId;
     public String roomId;
-    public float x;
-    public float y;
-    public float dirX;
-    public float dirY;
-    public float velX;
-    public float velY;
-    public String currentState;
-    public String displayName;
-    public List<GameMessage> existingPlayers;
+
+    public PlayerDto player;
+    public BulletDto bullet;
+
+    public List<PlayerDto> existingPlayers;
+    public List<BulletDto> existingBullets;
 
     public GameMessage() {}
 
@@ -22,11 +19,5 @@ public class GameMessage {
         this.type = type;
         this.playerId = playerId;
         this.roomId = roomId;
-    }
-
-    public GameMessage(String type, String playerId, String roomId, float x, float y) {
-        this(type, playerId, roomId);
-        this.x = x;
-        this.y = y;
     }
 }

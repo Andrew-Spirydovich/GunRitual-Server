@@ -1,6 +1,7 @@
 package com.example.GunRitual_Server;
 
 import com.example.GunRitual_Server.Dto.GameMessage;
+import com.example.GunRitual_Server.Dto.PlayerDto;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -42,7 +43,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             case "JOIN" -> handleJoin(session, msg);
             case "MOVE" -> handleMove(session, msg);
             case "LEAVE" -> handleLeave(session, msg);
-            case "STATE-CHANGED" -> handleStateChanged(session, msg);
+            case "STATE_CHANGED" -> handleStateChanged(session, msg);
             default -> logger.warn("Неизвестный тип сообщения: {}", msg.type);
         }
     }
@@ -60,13 +61,21 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
             sessionManager.addToRoom(msg.roomId, session);
 
+            // Создаём PlayerDto для нового игрока
+            PlayerDto localPlayer = new PlayerDto(playerId, 440, 544,0,0, "Idle",
+                    (msg.player != null) ? msg.player.nickname : "Player");
+
             // ACK новому игроку
-            GameMessage ack = new GameMessage("JOIN_ACK", playerId, msg.roomId, 0, 0);
+            GameMessage ack = new GameMessage("JOIN_ACK", playerId, msg.roomId);
+            ack.player = localPlayer;
             ack.existingPlayers = getExistingPlayers(session, msg.roomId);
+            ack.existingBullets = new ArrayList<>();
             sendMessage(session, ack);
 
             // JOIN всем остальным
-            broadcastToRoom(msg.roomId, new GameMessage("JOIN", playerId, msg.roomId, 0, 0), session);
+            GameMessage joinNotify = new GameMessage("JOIN", playerId, msg.roomId);
+            joinNotify.player = localPlayer;
+            broadcastToRoom(msg.roomId, joinNotify, session);
         }
     }
 
@@ -104,12 +113,13 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         logger.info("Сессия {} закрыта. Статус: {}", session.getId(), status);
     }
 
-    private List<GameMessage> getExistingPlayers(WebSocketSession current, String roomId) {
-        List<GameMessage> players = new ArrayList<>();
+    private List<PlayerDto> getExistingPlayers(WebSocketSession current, String roomId) {
+        List<PlayerDto> players = new ArrayList<>();
         for (WebSocketSession s : sessionManager.getRoomSession(roomId)) {
-            if (s == current) continue;
+            if (s == current)
+                continue;
             String otherId = (String) s.getAttributes().get("playerId");
-            players.add(new GameMessage("JOIN", otherId, roomId, 0, 0));
+            players.add(new PlayerDto(otherId, 440, 544, 0, 0, "Idle", "Player"));
         }
         return players;
     }
@@ -143,8 +153,6 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             }
         }
     }
-
-
 
     private void sendMessage(WebSocketSession session, GameMessage msg) throws IOException {
         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(msg)));
