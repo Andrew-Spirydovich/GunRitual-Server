@@ -5,6 +5,7 @@ public class BulletDto {
     public String ownerId;
     public float x;
     public float y;
-    public float directionX;
-    public float directionY;
+    public float dirX;
+    public float dirY;
+    public String targetId;
 }

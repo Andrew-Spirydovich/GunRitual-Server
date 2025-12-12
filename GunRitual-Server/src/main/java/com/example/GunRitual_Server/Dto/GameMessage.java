@@ -9,6 +9,9 @@ public class GameMessage {
 
     public PlayerDto player;
     public BulletDto bullet;
+    public float dmg;
+
+    public String nickname;
 
     public List<PlayerDto> existingPlayers;
     public List<BulletDto> existingBullets;
@@ -19,5 +22,19 @@ public class GameMessage {
         this.type = type;
         this.playerId = playerId;
         this.roomId = roomId;
+    }
+
+    public GameMessage(String type, String playerId, String roomId, String nickname) {
+        this.type = type;
+        this.playerId = playerId;
+        this.roomId = roomId;
+        this.nickname = nickname;
+    }
+
+    public GameMessage(String type, String playerId, String roomId, float dmg) {
+        this.type = type;
+        this.playerId = playerId;
+        this.roomId = roomId;
+        this.dmg = dmg;
     }
 }

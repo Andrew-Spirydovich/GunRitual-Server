@@ -1,5 +1,6 @@
 package com.example.GunRitual_Server;
 
+import com.example.GunRitual_Server.Dto.BulletDto;
 import com.example.GunRitual_Server.Dto.GameMessage;
 import com.example.GunRitual_Server.Dto.PlayerDto;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -12,6 +13,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.io.Console;
 import java.io.IOException;
 import java.util.*;
 
@@ -21,9 +23,11 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     private static final Logger logger = LoggerFactory.getLogger(GameWebSocketHandler.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SessionManager sessionManager;
+    private final BulletManager bulletManager;
 
-    public GameWebSocketHandler(SessionManager sessionManager) {
+    public GameWebSocketHandler(SessionManager sessionManager, BulletManager bulletManager) {
         this.sessionManager = sessionManager;
+        this.bulletManager = bulletManager;
     }
 
     @Override
@@ -44,16 +48,63 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             case "MOVE" -> handleMove(session, msg);
             case "LEAVE" -> handleLeave(session, msg);
             case "STATE_CHANGED" -> handleStateChanged(session, msg);
+            case "SHOOT" -> handleShoot(session, msg);
+            case "BULLET_HIT" -> handleBulletHit(session, msg);
             default -> logger.warn("Неизвестный тип сообщения: {}", msg.type);
         }
     }
-    private void handleStateChanged(WebSocketSession session, GameMessage msg) throws IOException
-    {
+
+    private void handleShoot(WebSocketSession session, GameMessage msg) throws IOException {
+        String roomId = msg.roomId;
+        String playerId = msg.playerId;
+        String targetId = msg.bullet.targetId;
+        synchronized (sessionManager.getRoomLock(roomId)) {
+
+            // Создаём уникальный id пули
+            BulletDto bullet = msg.bullet;
+            bullet.id = UUID.randomUUID().toString();
+
+            bulletManager.addBullet(roomId, bullet);
+
+            GameMessage response = new GameMessage("BULLET_SPAWN", targetId, roomId);
+            response.bullet = bullet;
+
+            broadcastToRoom(roomId, response, null);
+        }
+    }
+
+    private void handleBulletHit(WebSocketSession session, GameMessage msg) throws IOException {
+        String roomId = msg.roomId;
+
+        synchronized (sessionManager.getRoomLock(roomId)) {
+
+            String bulletId = msg.bullet.id;
+            bulletManager.removeBullet(roomId, bulletId);
+
+            // Создаём новый объект BulletDto для DAMAGE
+            BulletDto bulletDamage = new BulletDto();
+            bulletDamage.id = bulletId;
+            bulletDamage.ownerId = msg.bullet.ownerId;
+            bulletDamage.targetId = msg.bullet.targetId;
+
+            // Отправляем DAMAGE всем игрокам
+            GameMessage dmg = new GameMessage("DAMAGE", msg.playerId, roomId, 10);
+            dmg.bullet = bulletDamage;
+
+            broadcastToRoom(roomId, dmg, null);
+
+            // Уведомляем всех об удалении пули
+            GameMessage notify = new GameMessage("BULLET_REMOVE", msg.playerId, roomId);
+            notify.bullet = msg.bullet;
+
+            broadcastToRoom(roomId, notify, null);
+        }
+    }
+    private void handleStateChanged(WebSocketSession session, GameMessage msg) throws IOException {
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
             broadcastToRoom(msg.roomId, msg, session);
         }
     }
-
     private void handleJoin(WebSocketSession session, GameMessage msg) throws IOException {
         String playerId = (String) session.getAttributes().get("playerId");
         logger.info("JOIN: Назначен playerId {}", playerId);
@@ -62,19 +113,36 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             sessionManager.addToRoom(msg.roomId, session);
 
             // Создаём PlayerDto для нового игрока
-            PlayerDto localPlayer = new PlayerDto(playerId, 440, 544,0,0, "Idle",
-                    (msg.player != null) ? msg.player.nickname : "Player");
+            PlayerDto localPlayer = new PlayerDto(
+                    playerId,
+                    440,
+                    544,
+                    0,
+                    0,
+                    "Idle",
+                    (msg.player != null) ? msg.player.nickname : "Player"
+            );
+
+            // Сохраняем игрока в SessionManager
+            sessionManager.addPlayer(msg.roomId, localPlayer);
 
             // ACK новому игроку
             GameMessage ack = new GameMessage("JOIN_ACK", playerId, msg.roomId);
             ack.player = localPlayer;
-            ack.existingPlayers = getExistingPlayers(session, msg.roomId);
-            ack.existingBullets = new ArrayList<>();
+
+            // Берем остальных игроков из SessionManager
+            ack.existingPlayers = new ArrayList<>(sessionManager.getPlayers(msg.roomId));
+
+            // Удаляем самого себя из existingPlayers
+            ack.existingPlayers.removeIf(p -> p.id.equals(playerId));
+
+            ack.existingBullets = bulletManager.getBullets(msg.roomId).stream().toList();
             sendMessage(session, ack);
 
             // JOIN всем остальным
             GameMessage joinNotify = new GameMessage("JOIN", playerId, msg.roomId);
             joinNotify.player = localPlayer;
+
             broadcastToRoom(msg.roomId, joinNotify, session);
         }
     }
@@ -113,16 +181,16 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         logger.info("Сессия {} закрыта. Статус: {}", session.getId(), status);
     }
 
-    private List<PlayerDto> getExistingPlayers(WebSocketSession current, String roomId) {
-        List<PlayerDto> players = new ArrayList<>();
-        for (WebSocketSession s : sessionManager.getRoomSession(roomId)) {
-            if (s == current)
-                continue;
-            String otherId = (String) s.getAttributes().get("playerId");
-            players.add(new PlayerDto(otherId, 440, 544, 0, 0, "Idle", "Player"));
-        }
-        return players;
-    }
+//    private List<PlayerDto> getExistingPlayers(WebSocketSession current, String roomId) {
+//        List<PlayerDto> players = new ArrayList<>();
+//        for (WebSocketSession s : sessionManager.getRoomSession(roomId)) {
+//            if (s == current)
+//                continue;
+//            String otherId = (String) s.getAttributes().get("playerId");
+//            players.add(new PlayerDto(otherId, 440, 544, 0, 0, "Idle", "Player"));
+//        }
+//        return players;
+//    }
 
 
     private void broadcastToRoom(String roomId, GameMessage msg, WebSocketSession exclude) {
