@@ -108,47 +108,50 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    private static final int BULLET_DAMAGE = 25;
+
     private void handleBulletHit(WebSocketSession session, GameMessage msg) throws IOException {
         String roomId = msg.roomId;
 
         synchronized (sessionManager.getRoomLock(roomId)) {
 
             String bulletId = msg.bullet.id;
-            bulletManager.removeBullet(roomId, bulletId);
-
             String targetId = msg.bullet.targetId;
             PlayerDto player = sessionManager.getPlayer(roomId, targetId);
             if (player == null)
                 return;
 
-            // Уменьшаем HP
-            player.health -= msg.dmg;
+            // Определяем урон
+            int dmg = BULLET_DAMAGE;
 
-            // Проверяем смерть
+            // Наносим урон
+            player.health -= dmg;
+
             if (player.health <= 0 && !player.isDead) {
                 player.isDead = true;
                 player.health = 0;
                 logger.info("Игрок {} умер", targetId);
             }
 
-            // Создаём новый объект BulletDto для DAMAGE
+            // Формируем DAMAGE пакет
             BulletDto bulletDamage = new BulletDto();
             bulletDamage.id = bulletId;
             bulletDamage.ownerId = msg.bullet.ownerId;
             bulletDamage.targetId = targetId;
 
-            // Отправляем DAMAGE всем игрокам
-            GameMessage dmg = new GameMessage("DAMAGE", targetId, roomId, msg.dmg);
-            dmg.bullet = bulletDamage;
-            dmg.player = player; // теперь клиент знает новый HP и isDead
-            broadcastToRoom(roomId, dmg, null);
+            GameMessage dmgMsg = new GameMessage("DAMAGE", targetId, roomId, dmg);
+            dmgMsg.bullet = bulletDamage;
+            dmgMsg.player = player;
+            broadcastToRoom(roomId, dmgMsg, null);
 
-            // Уведомляем всех об удалении пули
+            // После — удаляем пулю
+            bulletManager.removeBullet(roomId, bulletId);
             GameMessage notify = new GameMessage("BULLET_REMOVE", msg.playerId, roomId);
             notify.bullet = msg.bullet;
             broadcastToRoom(roomId, notify, null);
         }
     }
+
 
 
 
