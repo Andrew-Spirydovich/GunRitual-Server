@@ -24,10 +24,12 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SessionManager sessionManager;
     private final BulletManager bulletManager;
+    private final SpawnService spawnService;
 
-    public GameWebSocketHandler(SessionManager sessionManager, BulletManager bulletManager) {
+    public GameWebSocketHandler(SessionManager sessionManager, BulletManager bulletManager, SpawnService spawnService) {
         this.sessionManager = sessionManager;
         this.bulletManager = bulletManager;
+        this.spawnService = spawnService;
     }
 
     @Override
@@ -50,9 +52,42 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             case "STATE_CHANGED" -> handleStateChanged(session, msg);
             case "SHOOT" -> handleShoot(session, msg);
             case "BULLET_HIT" -> handleBulletHit(session, msg);
+            case "RESPAWN_REQUEST" -> handleRespawn(session, msg);
             default -> logger.warn("Неизвестный тип сообщения: {}", msg.type);
         }
     }
+
+    private void handleRespawn(WebSocketSession session, GameMessage msg) {
+        String roomId = msg.roomId;
+        String playerId = msg.playerId;
+
+        synchronized (sessionManager.getRoomLock(roomId)) {
+            PlayerDto player = sessionManager.getPlayer(roomId, playerId);
+            if (player == null)
+                return;
+
+            // защита от читов
+            if (!player.isDead)
+                return;
+
+            // получаем точку респавна
+            float[] spawn = spawnService.getNextSpawn(roomId);
+
+            player.x = spawn[0];
+            player.y = spawn[1];
+            player.health = 100f;
+            player.isDead = false;
+
+            GameMessage respawnMsg = new GameMessage();
+            respawnMsg.type = "PLAYER_RESPAWN";
+            respawnMsg.roomId = roomId;
+            respawnMsg.player = player;
+
+            broadcastToRoom(roomId, respawnMsg, null);
+        }
+    }
+
+
 
     private void handleShoot(WebSocketSession session, GameMessage msg) throws IOException {
         String roomId = msg.roomId;
@@ -81,25 +116,42 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             String bulletId = msg.bullet.id;
             bulletManager.removeBullet(roomId, bulletId);
 
+            String targetId = msg.bullet.targetId;
+            PlayerDto player = sessionManager.getPlayer(roomId, targetId);
+            if (player == null)
+                return;
+
+            // Уменьшаем HP
+            player.health -= msg.dmg;
+
+            // Проверяем смерть
+            if (player.health <= 0 && !player.isDead) {
+                player.isDead = true;
+                player.health = 0;
+                logger.info("Игрок {} умер", targetId);
+            }
+
             // Создаём новый объект BulletDto для DAMAGE
             BulletDto bulletDamage = new BulletDto();
             bulletDamage.id = bulletId;
             bulletDamage.ownerId = msg.bullet.ownerId;
-            bulletDamage.targetId = msg.bullet.targetId;
+            bulletDamage.targetId = targetId;
 
             // Отправляем DAMAGE всем игрокам
-            GameMessage dmg = new GameMessage("DAMAGE", msg.bullet.targetId, roomId, 10);
+            GameMessage dmg = new GameMessage("DAMAGE", targetId, roomId, msg.dmg);
             dmg.bullet = bulletDamage;
-
+            dmg.player = player; // теперь клиент знает новый HP и isDead
             broadcastToRoom(roomId, dmg, null);
 
             // Уведомляем всех об удалении пули
             GameMessage notify = new GameMessage("BULLET_REMOVE", msg.playerId, roomId);
             notify.bullet = msg.bullet;
-
             broadcastToRoom(roomId, notify, null);
         }
     }
+
+
+
     private void handleStateChanged(WebSocketSession session, GameMessage msg) throws IOException {
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
             broadcastToRoom(msg.roomId, msg, session);
@@ -112,40 +164,45 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
             sessionManager.addToRoom(msg.roomId, session);
 
+            // Получаем индекс игрока в комнате
+            int playerIndex = sessionManager.getPlayers(msg.roomId).size(); // до добавления
+
+            // Получаем координаты из spawnService
+            float[] spawn = spawnService.getSpawnByIndex(msg.roomId, playerIndex);
+
             // Создаём PlayerDto для нового игрока
             PlayerDto localPlayer = new PlayerDto(
                     playerId,
-                    440,
-                    544,
+                    spawn[0],
+                    spawn[1],
                     0,
                     0,
                     "Idle",
                     (msg.player != null) ? msg.player.nickname : "Player"
             );
 
-            // Сохраняем игрока в SessionManager
+            // Сохраняем игрока
             sessionManager.addPlayer(msg.roomId, localPlayer);
 
             // ACK новому игроку
             GameMessage ack = new GameMessage("JOIN_ACK", playerId, msg.roomId);
             ack.player = localPlayer;
 
-            // Берем остальных игроков из SessionManager
+            // Берем остальных игроков
             ack.existingPlayers = new ArrayList<>(sessionManager.getPlayers(msg.roomId));
-
-            // Удаляем самого себя из existingPlayers
             ack.existingPlayers.removeIf(p -> p.id.equals(playerId));
 
             ack.existingBullets = bulletManager.getBullets(msg.roomId).stream().toList();
             sendMessage(session, ack);
 
-            // JOIN всем остальным
+            // Уведомляем остальных
             GameMessage joinNotify = new GameMessage("JOIN", playerId, msg.roomId);
             joinNotify.player = localPlayer;
 
             broadcastToRoom(msg.roomId, joinNotify, session);
         }
     }
+
 
     private void handleMove(WebSocketSession session, GameMessage msg) throws IOException {
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
@@ -227,6 +284,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             }
         }
     }
+
 
     private void sendMessage(WebSocketSession session, GameMessage msg) throws IOException {
         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(msg)));

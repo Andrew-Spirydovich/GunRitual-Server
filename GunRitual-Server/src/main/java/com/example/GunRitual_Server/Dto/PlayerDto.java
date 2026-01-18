@@ -9,6 +9,8 @@
         public float dirX;
         public float dirY;
         public float hp;
+        public boolean isDead;
+        public float health;
 
         public PlayerDto() {}
 
