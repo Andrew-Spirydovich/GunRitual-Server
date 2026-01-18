@@ -88,7 +88,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             bulletDamage.targetId = msg.bullet.targetId;
 
             // Отправляем DAMAGE всем игрокам
-            GameMessage dmg = new GameMessage("DAMAGE", msg.playerId, roomId, 10);
+            GameMessage dmg = new GameMessage("DAMAGE", msg.bullet.targetId, roomId, 10);
             dmg.bullet = bulletDamage;
 
             broadcastToRoom(roomId, dmg, null);
@@ -156,7 +156,11 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     private void handleLeave(WebSocketSession session, GameMessage msg) throws IOException {
         logger.info("LEAVE: Принят пакет от {}", msg.playerId);
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
+
+            String playerId = msg.playerId;
+            sessionManager.removePlayer(msg.roomId, playerId);
             sessionManager.removeFromRoom(msg.roomId, session);
+
             broadcastToRoom(msg.roomId, msg, session);
         }
     }
@@ -169,13 +173,15 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String roomId = sessionManager.getRoomIdBySession(session);
-        if (roomId == null) return;
+        if (roomId == null)
+            return;
+
+        String playerId = (String) session.getAttributes().get("playerId");
 
         synchronized (sessionManager.getRoomLock(roomId)) {
+            sessionManager.removePlayer(roomId, playerId);
             sessionManager.removeFromRoom(roomId, session);
-
-            String playerId = (String) session.getAttributes().get("playerId");
-            broadcastToRoom(roomId, new GameMessage("LEAVE", playerId, roomId), session);
+            broadcastToRoom(roomId, new GameMessage("LEAVE", playerId, roomId), null);
         }
 
         logger.info("Сессия {} закрыта. Статус: {}", session.getId(), status);
