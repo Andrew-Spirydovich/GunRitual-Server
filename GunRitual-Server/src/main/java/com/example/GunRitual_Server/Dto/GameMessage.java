@@ -1,6 +1,7 @@
 package com.example.GunRitual_Server.Dto;
 
 import java.util.List;
+import java.util.Map;
 
 public class GameMessage {
     public String type;
@@ -15,6 +16,8 @@ public class GameMessage {
 
     public List<PlayerDto> existingPlayers;
     public List<BulletDto> existingBullets;
+    public int time;
+    public Map<String, Integer> scores;
 
     public GameMessage() {}
 

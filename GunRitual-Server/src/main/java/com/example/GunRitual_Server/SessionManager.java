@@ -12,11 +12,24 @@ public class SessionManager {
     private final Map<String, Set<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
     private final Map<String, Map<String, PlayerDto>> playersByRoom = new ConcurrentHashMap<>();
     private final Map<String, Object> roomLocks = new ConcurrentHashMap<>();
+    private final Map<String, GameRoomState> roomStates = new ConcurrentHashMap<>();
 
     public void addPlayer(String roomId, PlayerDto player) {
         playersByRoom
                 .computeIfAbsent(roomId, k -> new ConcurrentHashMap<>())
                 .put(player.id, player);
+    }
+
+    public GameRoomState getOrCreateRoomState(String roomId) {
+        return roomStates.computeIfAbsent(roomId, id -> {
+            GameRoomState state = new GameRoomState();
+            state.startTimeMillis = System.currentTimeMillis();
+            return state;
+        });
+    }
+
+    public GameRoomState getRoomState(String roomId) {
+        return roomStates.get(roomId);
     }
 
     public PlayerDto getPlayer(String roomId, String playerId) {
@@ -31,6 +44,10 @@ public class SessionManager {
     public void removePlayer(String roomId, String playerId) {
         Map<String, PlayerDto> map = playersByRoom.get(roomId);
         if (map != null) map.remove(playerId);
+    }
+
+    public Set<String> getRoomIds() {
+        return new HashSet<>(roomStates.keySet());
     }
 
     public Object getRoomLock(String roomId) {

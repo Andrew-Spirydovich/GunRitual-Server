@@ -13,7 +13,6 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.Console;
 import java.io.IOException;
 import java.util.*;
 
@@ -25,11 +24,30 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     private final SessionManager sessionManager;
     private final BulletManager bulletManager;
     private final SpawnService spawnService;
+    private static final int BULLET_DAMAGE = 10;
 
     public GameWebSocketHandler(SessionManager sessionManager, BulletManager bulletManager, SpawnService spawnService) {
         this.sessionManager = sessionManager;
         this.bulletManager = bulletManager;
         this.spawnService = spawnService;
+    }
+
+    public void sendGameTime(String roomId, int secondsLeft) {
+        GameMessage msg = new GameMessage();
+        msg.type = "GAME_TIME";
+        msg.roomId = roomId;
+        msg.time = secondsLeft;
+
+        broadcastToRoom(roomId, msg, null);
+    }
+
+    public void sendGameFinished(String roomId, GameRoomState state) {
+        GameMessage msg = new GameMessage();
+        msg.type = "GAME_FINISHED";
+        msg.roomId = roomId;
+        msg.scores = state.scores;
+
+        broadcastToRoom(roomId, msg, null);
     }
 
     @Override
@@ -108,8 +126,6 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private static final int BULLET_DAMAGE = 25;
-
     private void handleBulletHit(WebSocketSession session, GameMessage msg) throws IOException {
         String roomId = msg.roomId;
 
@@ -130,7 +146,13 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             if (player.health <= 0 && !player.isDead) {
                 player.isDead = true;
                 player.health = 0;
-                logger.info("Игрок {} умер", targetId);
+
+                GameRoomState state = sessionManager.getRoomState(roomId);
+                if (state != null) {
+                    state.scores.merge(msg.bullet.ownerId, 1, Integer::sum);
+                }
+
+                logger.info("Игрок {} убит игроком {}", targetId, msg.bullet.ownerId);
             }
 
             // Формируем DAMAGE пакет
@@ -165,6 +187,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         logger.info("JOIN: Назначен playerId {}", playerId);
 
         synchronized (sessionManager.getRoomLock(msg.roomId)) {
+            sessionManager.getOrCreateRoomState(msg.roomId);
             sessionManager.addToRoom(msg.roomId, session);
 
             // Получаем индекс игрока в комнате
