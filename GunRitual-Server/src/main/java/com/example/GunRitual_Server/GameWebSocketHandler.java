@@ -149,11 +149,18 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
                 GameRoomState state = sessionManager.getRoomState(roomId);
                 if (state != null) {
+                    // начисляем 1 очко за убийство
                     state.scores.merge(msg.bullet.ownerId, 1, Integer::sum);
-                }
 
-                logger.info("Игрок {} убит игроком {}", targetId, msg.bullet.ownerId);
+                    // --- Отправляем всем игрокам обновлённые очки ---
+                    GameMessage scoreUpdate = new GameMessage();
+                    scoreUpdate.type = "SCORE_UPDATE";
+                    scoreUpdate.roomId = roomId;
+                    scoreUpdate.scores = new HashMap<>(state.scores); // копия мапы
+                    broadcastToRoom(roomId, scoreUpdate, null);
+                }
             }
+
 
             // Формируем DAMAGE пакет
             BulletDto bulletDamage = new BulletDto();
@@ -243,7 +250,6 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             String playerId = msg.playerId;
             sessionManager.removePlayer(msg.roomId, playerId);
             sessionManager.removeFromRoom(msg.roomId, session);
-
             broadcastToRoom(msg.roomId, msg, session);
         }
     }
